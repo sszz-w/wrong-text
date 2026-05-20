@@ -1,0 +1,4 @@
+pycorrector
+torch
+numpy<2
+kenlm
