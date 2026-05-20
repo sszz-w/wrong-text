@@ -68,6 +68,50 @@ m_rule = create_corrector("rule")
 result = correct_sentence(m_rule, "今天新情很好")
 ```
 
+## API 服务
+
+项目提供 FastAPI HTTP 接口，供其他项目远程调用。
+
+### 启动服务
+
+```bash
+source venv/bin/activate
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+启动后访问 http://localhost:8000/docs 查看 Swagger 文档。
+
+### 接口说明
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/correct` | POST | 单句纠错 |
+| `/correct/batch` | POST | 批量纠错（最多 32 条） |
+| `/health` | GET | 健康检查 |
+
+### 调用示例
+
+```python
+import requests
+
+# 单句纠错
+resp = requests.post("http://localhost:8000/correct", json={"text": "少先队员因该为老人让坐"})
+print(resp.json())
+# {"source": "少先队员因该为老人让坐", "target": "少先队员应该为老人让座", "errors": [...], "has_error": true}
+
+# 批量纠错
+resp = requests.post("http://localhost:8000/correct/batch", json={"texts": ["今天新情很好", "我也很高心"]})
+print(resp.json())
+```
+
+### curl 示例
+
+```bash
+curl -X POST http://localhost:8000/correct \
+  -H "Content-Type: application/json" \
+  -d '{"text": "少先队员因该为老人让坐"}'
+```
+
 ## 注意事项
 
 - MacBERT 模型需提前下载到 `models/macbert4csc` 目录
