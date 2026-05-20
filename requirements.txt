@@ -1,4 +1,6 @@
 pycorrector
-torch
+torch>=2.2
 numpy<2
 kenlm
+transformers<4.40
+safetensors
