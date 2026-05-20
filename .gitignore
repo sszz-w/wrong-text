@@ -10,6 +10,9 @@ __pycache__/
 ~/.pycorrector/
 .pycorrector/
 
+# MacBERT model files (too large for git)
+models/
+
 # IDE
 .vscode/
 .idea/
