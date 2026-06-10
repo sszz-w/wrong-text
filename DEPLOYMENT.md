@@ -46,10 +46,10 @@ huggingface-cli download shibing624/macbert4csc-base-chinese \
 
 ```bash
 # 单进程测试
-uvicorn app:app --host 0.0.0.0 --port 8000
+uvicorn app:app --host 0.0.0.0 --port 12342
 
 # 访问健康检查接口
-curl http://localhost:8000/health
+curl http://localhost:12342/health
 # 预期返回: {"status":"ok","model_loaded":true}
 ```
 
@@ -67,7 +67,7 @@ Type=simple
 User=your-username
 WorkingDirectory=/path/to/deploy
 Environment="PATH=/path/to/deploy/venv/bin"
-ExecStart=/path/to/deploy/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
+ExecStart=/path/to/deploy/venv/bin/uvicorn app:app --host 0.0.0.0 --port 12342 --workers 2
 Restart=always
 RestartSec=10
 
@@ -96,7 +96,7 @@ server {
     client_max_body_size 20M;  # 允许上传 20MB PDF 文件
 
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:12342;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -126,7 +126,7 @@ sudo systemctl reload nginx
 
 ```bash
 # 推荐公式：workers = (2 * CPU核心数) + 1
-uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
+uvicorn app:app --host 0.0.0.0 --port 12342 --workers 4
 ```
 
 ### 2. 日志配置
@@ -169,7 +169,7 @@ import requests
 
 # 文本纠错
 response = requests.post(
-    "http://your-server:8000/correct",
+    "http://your-server:12342/correct",
     json={"text": "少先队员因该为老人让坐"}
 )
 print(response.json())
@@ -177,7 +177,7 @@ print(response.json())
 # PDF 检查
 with open("招标文件.pdf", "rb") as f:
     response = requests.post(
-        "http://your-server:8000/correct/pdf",
+        "http://your-server:12342/correct/pdf",
         files={"file": f}
     )
 print(response.json())
@@ -187,12 +187,12 @@ print(response.json())
 
 ```bash
 # 单句纠错
-curl -X POST http://your-server:8000/correct \
+curl -X POST http://your-server:12342/correct \
   -H "Content-Type: application/json" \
   -d '{"text": "少先队员因该为老人让坐"}'
 
 # PDF 检查
-curl -X POST http://your-server:8000/correct/pdf \
+curl -X POST http://your-server:12342/correct/pdf \
   -F "file=@招标文件.pdf"
 ```
 

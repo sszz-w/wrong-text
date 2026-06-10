@@ -36,10 +36,10 @@ huggingface-cli download shibing624/macbert4csc-base-chinese \
 
 ```bash
 source venv/bin/activate
-uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
+uvicorn app:app --host 0.0.0.0 --port 12342 --workers 2
 ```
 
-服务启动后访问 http://localhost:8000/docs 查看 API 文档。
+服务启动后访问 http://localhost:12342/docs 查看 API 文档。
 
 ## API 接口
 
@@ -47,14 +47,14 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
 
 **单句纠错**：
 ```bash
-curl -X POST http://localhost:8000/correct \
+curl -X POST http://localhost:12342/correct \
   -H "Content-Type: application/json" \
   -d '{"text": "少先队员因该为老人让坐"}'
 ```
 
 **批量纠错**（最多 32 条）：
 ```bash
-curl -X POST http://localhost:8000/correct/batch \
+curl -X POST http://localhost:12342/correct/batch \
   -H "Content-Type: application/json" \
   -d '{"texts": ["今天新情很好", "我也很高心"]}'
 ```
@@ -62,7 +62,7 @@ curl -X POST http://localhost:8000/correct/batch \
 ### 2. PDF 招标文件检查
 
 ```bash
-curl -X POST http://localhost:8000/correct/pdf \
+curl -X POST http://localhost:12342/correct/pdf \
   -F "file=@招标文件.pdf"
 ```
 
@@ -108,7 +108,7 @@ curl -X POST http://localhost:8000/correct/pdf \
 ### 3. 健康检查
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:12342/health
 # 返回: {"status":"ok","model_loaded":true}
 ```
 
