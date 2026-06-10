@@ -4,11 +4,13 @@
 通过 MODEL_TYPE 配置项切换模型
 """
 
+import os
 import re
 import time
 
 MODEL_TYPE = "macbert"  # 可选值: "macbert", "rule"
-MACBERT_MODEL_PATH = "./models/macbert4csc"
+# 使用绝对路径，确保在任何目录启动都能找到模型
+MACBERT_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models/macbert4csc")
 
 
 def is_chinese_char(char: str) -> bool:

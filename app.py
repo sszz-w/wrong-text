@@ -6,10 +6,15 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from main import create_corrector, correct_sentence, correct_batch
+from pdf_check import check_pdf
+
+# 上传 PDF 体积上限，防止超大文件耗尽内存。
+MAX_PDF_BYTES = 20 * 1024 * 1024  # 20 MB
 
 corrector = None
 
@@ -59,6 +64,23 @@ class BatchCorrectionResponse(BaseModel):
     error_count: int
 
 
+class PdfErrorDetail(BaseModel):
+    page: int
+    wrong: str
+    correct: str
+    position: int
+    context: str
+    sentence: str
+    location: dict | None = None  # /locate 返回的物理坐标，不可达时为 None
+
+
+class PdfCheckResponse(BaseModel):
+    filename: str
+    page_count: int
+    error_count: int
+    errors: list[PdfErrorDetail]
+
+
 def _format_result(result: dict) -> CorrectionResponse:
     errors = [
         ErrorDetail(wrong=w, correct=r, position=p)
@@ -96,3 +118,34 @@ async def correct_text_batch(req: BatchCorrectionRequest):
 async def health():
     """健康检查"""
     return {"status": "ok", "model_loaded": corrector is not None}
+
+
+@app.post("/correct/pdf", response_model=PdfCheckResponse)
+async def correct_pdf(file: UploadFile = File(..., description="待检查的 PDF 招标文件")):
+    """上传 PDF 招标文件，返回全文错别字检查结果（带页码和上下文）"""
+    filename = file.filename or "uploaded.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大，上限 {MAX_PDF_BYTES // (1024 * 1024)} MB",
+        )
+
+    try:
+        # 放线程池执行：check_pdf 既有阻塞的模型推理，
+        # 又会回调同一服务的 /locate，必须让出事件循环避免自调用死锁。
+        result = await run_in_threadpool(check_pdf, corrector, pdf_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"PDF 解析失败: {e}")
+
+    return PdfCheckResponse(
+        filename=filename,
+        page_count=result["page_count"],
+        error_count=result["error_count"],
+        errors=[PdfErrorDetail(**e) for e in result["errors"]],
+    )

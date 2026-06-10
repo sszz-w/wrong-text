@@ -10,6 +10,9 @@ __pycache__/
 ~/.pycorrector/
 .pycorrector/
 
+# Local model files (download via huggingface-cli)
+models/
+
 # IDE
 .vscode/
 .idea/

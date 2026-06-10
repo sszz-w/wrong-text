@@ -1,120 +1,203 @@
-# 中文错别字检测工具
+# 中文错别字检测与 PDF 原文定位服务
 
-使用 pycorrector 实现中文句子的错别字检测和纠正，支持多种纠错模型。
+基于 pycorrector 的中文错别字检测服务，专为招标文件等专业文档设计，提供错别字检测和 PDF 原文精确定位功能。
 
-## 支持的模型
+## 核心功能
 
-| 模型 | 配置值 | 说明 |
-|------|--------|------|
-| MacBertCorrector | `macbert`（默认） | 深度学习模型，准确率高 |
-| Corrector | `rule` | 规则+统计模型，无需下载大模型 |
+- **文本纠错**：单句/批量纠错，支持 MacBERT 和规则模型
+- **PDF 全文检查**：上传 PDF 招标文件，自动检测全文错别字
+- **原文精确定位**：返回错字在 PDF 中的页码、坐标、bounding box
+- **HTTP API**：FastAPI 接口，易于集成到其他系统
 
-## 安装
+## 快速开始
+
+### 1. 环境准备
 
 ```bash
-# 创建虚拟环境
+# 创建虚拟环境（推荐 Python 3.11-3.12）
 python3.12 -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 安装依赖（使用清华镜像源）
-pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+# 安装依赖
+pip install -r requirements.txt
 ```
 
-### MacBERT 模型准备
+### 2. 模型准备
 
-默认使用 MacBERT 模型，需要提前下载模型文件到 `models/macbert4csc` 目录：
+默认使用 MacBERT 模型，需下载到 `models/macbert4csc/` 目录：
 
 ```bash
-# 从 HuggingFace 下载
-huggingface-cli download shibing624/macbert4csc-base-chinese --local-dir models/macbert4csc
+# 使用 huggingface-cli 下载（约 391MB）
+huggingface-cli download shibing624/macbert4csc-base-chinese \
+  --local-dir models/macbert4csc
 ```
 
-## 配置
-
-在 `main.py` 顶部修改配置项：
-
-```python
-MODEL_TYPE = "macbert"  # 可选值: "macbert", "rule"
-MACBERT_MODEL_PATH = "./models/macbert4csc"
-```
-
-## 使用方法
-
-### 运行示例
+### 3. 启动服务
 
 ```bash
 source venv/bin/activate
-python main.py
+uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
-### 代码中调用
+服务启动后访问 http://localhost:8000/docs 查看 API 文档。
 
-```python
-from main import create_corrector, correct_sentence, correct_batch
+## API 接口
 
-# 创建纠错器（默认使用 macbert）
-m = create_corrector()
+### 1. 文本纠错
 
-# 纠正单个句子
-result = correct_sentence(m, "少先队员因该为老人让坐")
-print(result)
-# {'source': '少先队员因该为老人让坐', 'target': '少先队员应该为老人让座', 'errors': [...]}
-
-# 批量纠正
-results = correct_batch(m, ["今天新情很好", "我也很高心"])
-
-# 使用规则模型
-m_rule = create_corrector("rule")
-result = correct_sentence(m_rule, "今天新情很好")
-```
-
-## API 服务
-
-项目提供 FastAPI HTTP 接口，供其他项目远程调用。
-
-### 启动服务
-
-```bash
-source venv/bin/activate
-uvicorn app:app --host 0.0.0.0 --port 8000
-```
-
-启动后访问 http://localhost:8000/docs 查看 Swagger 文档。
-
-### 接口说明
-
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/correct` | POST | 单句纠错 |
-| `/correct/batch` | POST | 批量纠错（最多 32 条） |
-| `/health` | GET | 健康检查 |
-
-### 调用示例
-
-```python
-import requests
-
-# 单句纠错
-resp = requests.post("http://localhost:8000/correct", json={"text": "少先队员因该为老人让坐"})
-print(resp.json())
-# {"source": "少先队员因该为老人让坐", "target": "少先队员应该为老人让座", "errors": [...], "has_error": true}
-
-# 批量纠错
-resp = requests.post("http://localhost:8000/correct/batch", json={"texts": ["今天新情很好", "我也很高心"]})
-print(resp.json())
-```
-
-### curl 示例
-
+**单句纠错**：
 ```bash
 curl -X POST http://localhost:8000/correct \
   -H "Content-Type: application/json" \
   -d '{"text": "少先队员因该为老人让坐"}'
 ```
 
-## 注意事项
+**批量纠错**（最多 32 条）：
+```bash
+curl -X POST http://localhost:8000/correct/batch \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["今天新情很好", "我也很高心"]}'
+```
 
-- MacBERT 模型需提前下载到 `models/macbert4csc` 目录
-- 规则模型首次运行会下载约 2.9GB 的语言模型
-- 建议使用 Python 3.12 或更低版本
-- 需要安装 numpy<2 以保证兼容性
+### 2. PDF 招标文件检查
+
+```bash
+curl -X POST http://localhost:8000/correct/pdf \
+  -F "file=@招标文件.pdf"
+```
+
+**返回示例**：
+```json
+{
+  "filename": "招标文件.pdf",
+  "page_count": 12,
+  "error_count": 2,
+  "errors": [
+    {
+      "page": 1,
+      "wrong": "段",
+      "correct": "断",
+      "position": 455,
+      "context": "…根据历史数据不段优化轧制规程…",
+      "sentence": "系统应具备自学习功能，能够根据历史数据不段优化轧制规程。",
+      "location": {
+        "page": 1,
+        "pageWidth": 595,
+        "pageHeight": 842,
+        "x": 90,
+        "y": 329,
+        "width": 280,
+        "height": 10,
+        "match_layer": 1,
+        "bboxes": [
+          {"x0": 90.0, "y0": 329.0, "x1": 370.0, "y1": 339.0}
+        ]
+      }
+    }
+  ]
+}
+```
+
+**字段说明**：
+- `page` / `position`：错字所在页码和页内字符下标
+- `context` / `sentence`：错字上下文片段和所在完整句子
+- `location`：错字在 PDF 中的物理坐标（x/y 坐标、宽高、精确 bboxes）
+- `match_layer`：定位方式（1=精确匹配，2=归一化匹配，3=模糊匹配）
+- `location` 为 `null` 时表示定位失败，不影响错字结果本身
+
+### 3. 健康检查
+
+```bash
+curl http://localhost:8000/health
+# 返回: {"status":"ok","model_loaded":true}
+```
+
+## 原文定位原理
+
+错字定位由 `pdf_locator.py` 实现，采用三层匹配策略：
+
+1. **精确匹配**（layer 1）：直接匹配原文字符序列
+2. **归一化匹配**（layer 2）：去除空白、统一全半角后匹配
+3. **模糊匹配**（layer 3）：使用 difflib 应对细微文本差异
+
+定位过程：
+- 使用 `pdfplumber` 解析 PDF 每个字符的坐标
+- 按错字所在整句进行查找（自动去重，同一句只查一次）
+- 返回匹配文本的页码、坐标、bounding box（每行一个 bbox）
+
+## Python 调用示例
+
+```python
+from main import create_corrector, correct_sentence, correct_batch
+
+# 创建纠错器
+corrector = create_corrector()  # 默认使用 macbert
+
+# 单句纠错
+result = correct_sentence(corrector, "少先队员因该为老人让坐")
+print(result)
+# {'source': '少先队员因该为老人让坐', 
+#  'target': '少先队员应该为老人让座', 
+#  'errors': [('因', '应', 4), ('坐', '座', 10)]}
+
+# 批量纠错
+results = correct_batch(corrector, ["今天新情很好", "我也很高心"])
+
+# PDF 检查
+from pdf_check import check_pdf
+with open("招标文件.pdf", "rb") as f:
+    result = check_pdf(corrector, f.read())
+print(result)
+```
+
+## 配置说明
+
+在 `main.py` 中可配置：
+
+```python
+MODEL_TYPE = "macbert"  # 可选: "macbert", "rule"
+MACBERT_MODEL_PATH = "./models/macbert4csc"
+```
+
+- **macbert**（默认）：深度学习模型，准确率高，需预下载模型（391MB）
+- **rule**：规则+统计模型，首次运行自动下载语言模型（约 2.9GB）
+
+## 重要提示
+
+### 模型能力边界
+
+MacBERT 在通用中文文本上表现良好，但对于招标文件等专业文档：
+- **可能漏检**：专业术语、设备型号、国标编号等容易被跳过
+- **可能误纠**：上下文不足时会给出错误建议
+
+**建议**：将检测结果作为辅助工具，结合 `context`、`sentence`、`location` 字段人工复核。
+
+### PDF 限制
+
+- 文件大小上限：20 MB
+- 支持格式：标准 PDF（含可提取文本层）
+- 扫描件 PDF 需先 OCR 转换
+
+## 项目结构
+
+```
+.
+├── app.py              # FastAPI 服务入口
+├── main.py             # 纠错核心逻辑
+├── pdf_check.py        # PDF 文件检查与错误定位
+├── pdf_locator.py      # PDF 原文坐标定位（3 层匹配）
+├── requirements.txt    # 依赖清单
+├── README.md           # 本文档
+└── DEPLOYMENT.md       # 部署文档
+```
+
+## 技术栈
+
+- **FastAPI**：HTTP API 框架
+- **pycorrector**：中文纠错引擎（MacBERT 模型）
+- **PyMuPDF (fitz)**：PDF 文本抽取
+- **pdfplumber**：PDF 字符级坐标解析
+
+## 许可
+
+MIT License
