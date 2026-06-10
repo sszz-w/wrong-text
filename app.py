@@ -6,12 +6,13 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from main import create_corrector, correct_sentence, correct_batch
 from pdf_check import check_pdf
+from pdf_locator import locate_sentence
 
 # 上传 PDF 体积上限，防止超大文件耗尽内存。
 MAX_PDF_BYTES = 20 * 1024 * 1024  # 20 MB
@@ -79,6 +80,32 @@ class PdfCheckResponse(BaseModel):
     page_count: int
     error_count: int
     errors: list[PdfErrorDetail]
+
+
+class LocateRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=512, description="要定位的文本内容")
+
+
+class BBox(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class LocateResponse(BaseModel):
+    found: bool
+    page: int | None = None
+    pageWidth: int | None = None
+    pageHeight: int | None = None
+    text: str | None = None
+    x: int | None = None
+    y: int | None = None
+    width: int | None = None
+    height: int | None = None
+    match_layer: int | None = None
+    bboxes: list[BBox] | None = None
+    message: str | None = None
 
 
 def _format_result(result: dict) -> CorrectionResponse:
@@ -149,3 +176,72 @@ async def correct_pdf(file: UploadFile = File(..., description="待检查的 PDF
         error_count=result["error_count"],
         errors=[PdfErrorDetail(**e) for e in result["errors"]],
     )
+
+
+@app.post("/locate", response_model=LocateResponse)
+async def locate_text(
+    file: UploadFile = File(..., description="PDF 文件"),
+    query: str = Form(..., description="要查找的文本内容")
+):
+    """
+    在 PDF 中定位指定文本，返回页码、坐标和 bounding box。
+    支持三层匹配：精确匹配、归一化匹配、模糊匹配。
+    """
+    filename = file.filename or "uploaded.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+
+    if not query or len(query.strip()) == 0:
+        raise HTTPException(status_code=400, detail="查询文本不能为空")
+
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大，上限 {MAX_PDF_BYTES // (1024 * 1024)} MB",
+        )
+
+    try:
+        # 在线程池执行（pdf_locator 需要写临时文件 + pdfplumber 解析）
+        import tempfile
+        import os
+
+        def _locate_with_tempfile():
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp.write(pdf_bytes)
+                    tmp_path = tmp.name
+
+                result = locate_sentence(tmp_path, query)
+                return result
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        result = await run_in_threadpool(_locate_with_tempfile)
+
+        if result is None:
+            return LocateResponse(
+                found=False,
+                message="Sentence not found in PDF."
+            )
+
+        return LocateResponse(
+            found=True,
+            page=result.page,
+            pageWidth=result.pageWidth,
+            pageHeight=result.pageHeight,
+            text=result.text,
+            x=result.x,
+            y=result.y,
+            width=result.width,
+            height=result.height,
+            match_layer=result.match_layer,
+            bboxes=[BBox(x0=b[0], y0=b[1], x1=b[2], y1=b[3]) for b in result.bboxes]
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"定位失败: {e}")
