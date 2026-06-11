@@ -1,0 +1,30 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# pycorrector models cache
+~/.pycorrector/
+.pycorrector/
+
+# Local model files (download via huggingface-cli)
+models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Backup files
+*.bak
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
