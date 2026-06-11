@@ -208,6 +208,90 @@ def _write_highlight(pdf_path: str, result: MatchResult, opts: HighlightOptions)
     return out_path
 
 
+def _match_query_on_page(raw_text: str, query: str, chars: list[dict]) -> Optional[tuple[list[tuple], str, int]]:
+    bboxes = _try_exact(raw_text, query, chars)
+    if bboxes:
+        return bboxes, query, 1
+
+    bboxes = _try_normalized(raw_text, query, chars)
+    if bboxes:
+        return bboxes, _normalize(query), 2
+
+    fuzzy = _try_fuzzy(raw_text, query, chars)
+    if fuzzy:
+        bboxes, ratio = fuzzy
+        return bboxes, f"fuzzy(ratio={ratio:.2f})", 3
+
+    return None
+
+
+def _build_match_result(
+    page_num: int,
+    page_width: int,
+    page_height: int,
+    matched_text: str,
+    bboxes: list[tuple],
+    match_layer: int,
+) -> MatchResult:
+    x0_min = int(min(bbox[0] for bbox in bboxes))
+    y0_min = int(min(bbox[1] for bbox in bboxes))
+    x1_max = int(max(bbox[2] for bbox in bboxes))
+    y1_max = int(max(bbox[3] for bbox in bboxes))
+
+    return MatchResult(
+        page=page_num,
+        pageHeight=page_height,
+        pageWidth=page_width,
+        text=matched_text,
+        x=x0_min,
+        y=y0_min,
+        width=x1_max - x0_min,
+        height=y1_max - y0_min,
+        bboxes=bboxes,
+        match_layer=match_layer
+    )
+
+
+def locate_sentences(pdf_path: str, queries: list[str]) -> list[Optional[MatchResult]]:
+    """
+    Search multiple queries in one PDF pass.
+    Returns one result per query, preserving input order.
+    """
+    results: list[Optional[MatchResult]] = [None] * len(queries)
+    pending = set(range(len(queries)))
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            if not pending:
+                break
+
+            chars = _extract_chars(page)
+            if not chars:
+                continue
+
+            raw_text = "".join(c["char"] for c in chars)
+            page_width = int(page.width)
+            page_height = int(page.height)
+
+            for query_index in list(pending):
+                match = _match_query_on_page(raw_text, queries[query_index], chars)
+                if not match:
+                    continue
+
+                bboxes, matched_text, match_layer = match
+                results[query_index] = _build_match_result(
+                    page_num=page_num,
+                    page_width=page_width,
+                    page_height=page_height,
+                    matched_text=matched_text,
+                    bboxes=bboxes,
+                    match_layer=match_layer,
+                )
+                pending.remove(query_index)
+
+    return results
+
+
 def locate_sentence(
     pdf_path: str,
     query: str,
@@ -229,47 +313,20 @@ def locate_sentence(
             page_width = int(page.width)
             page_height = int(page.height)
 
-            # Layer 1
-            bboxes = _try_exact(raw_text, query, chars)
-            if bboxes:
-                matched_text = query
-                match_layer = 1
-                break
-
-            # Layer 2
-            bboxes = _try_normalized(raw_text, query, chars)
-            if bboxes:
-                matched_text = _normalize(query)
-                match_layer = 2
-                break
-
-            # Layer 3
-            fuzzy = _try_fuzzy(raw_text, query, chars)
-            if fuzzy:
-                bboxes, ratio = fuzzy
-                matched_text = f"fuzzy(ratio={ratio:.2f})"
-                match_layer = 3
+            match = _match_query_on_page(raw_text, query, chars)
+            if match:
+                bboxes, matched_text, match_layer = match
                 break
         else:
             return None
 
-    # Calculate overall bounding box for all matched lines
-    x0_min = int(min(bbox[0] for bbox in bboxes))
-    y0_min = int(min(bbox[1] for bbox in bboxes))
-    x1_max = int(max(bbox[2] for bbox in bboxes))
-    y1_max = int(max(bbox[3] for bbox in bboxes))
-
-    result = MatchResult(
-        page=page_num,
-        pageHeight=page_height,
-        pageWidth=page_width,
-        text=matched_text,
-        x=x0_min,
-        y=y0_min,
-        width=x1_max - x0_min,
-        height=y1_max - y0_min,
+    result = _build_match_result(
+        page_num=page_num,
+        page_width=page_width,
+        page_height=page_height,
+        matched_text=matched_text,
         bboxes=bboxes,
-        match_layer=match_layer
+        match_layer=match_layer,
     )
 
     if highlight.enabled:

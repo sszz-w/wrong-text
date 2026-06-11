@@ -142,7 +142,73 @@ curl -X POST http://localhost:12342/locate \
 }
 ```
 
-### 4. 健康检查
+### 4. 批量原文定位
+
+在同一个 PDF 中一次定位多段原文，适合把纠错结果、审核项或业务条款批量回填到 PDF 坐标。
+
+**请求格式**：`multipart/form-data`
+
+- `file`：PDF 文件
+- `queries`：JSON 字符串，支持字符串数组或带 ID 的对象数组
+
+```bash
+curl -X POST http://localhost:12342/locate/batch \
+  -F "file=@文档.pdf" \
+  -F 'queries={"queries":[{"id":"q1","text":"本次招标为道路改造工程"},{"id":"q2","text":"质量保证期"}]}'
+```
+
+也可以传简单数组：
+
+```bash
+curl -X POST http://localhost:12342/locate/batch \
+  -F "file=@文档.pdf" \
+  -F 'queries=["本次招标为道路改造工程","质量保证期"]'
+```
+
+**返回示例**：
+
+```json
+{
+  "filename": "文档.pdf",
+  "total": 2,
+  "found_count": 1,
+  "not_found_count": 1,
+  "results": [
+    {
+      "id": "q1",
+      "query": "本次招标为道路改造工程",
+      "found": true,
+      "page": 1,
+      "pageWidth": 595,
+      "pageHeight": 842,
+      "text": "本次招标为道路改造工程",
+      "x": 95,
+      "y": 72,
+      "width": 121,
+      "height": 11,
+      "match_layer": 1,
+      "bboxes": [
+        {"x0": 95.0, "y0": 72.7, "x1": 216.0, "y1": 83.7}
+      ],
+      "message": null
+    },
+    {
+      "id": "q2",
+      "query": "质量保证期",
+      "found": false,
+      "message": "Sentence not found in PDF."
+    }
+  ]
+}
+```
+
+**限制**：
+
+- 单个 PDF 文件大小上限：20 MB
+- 单次最多定位 100 条文本
+- 每条文本长度：1-512 字符
+
+### 5. 健康检查
 
 ```bash
 curl http://localhost:12342/health

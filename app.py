@@ -3,19 +3,24 @@
 基于 FastAPI，提供 HTTP 接口供其他项目调用
 """
 
+import json
+import os
+import tempfile
 import time
 from contextlib import asynccontextmanager
+from json import JSONDecodeError
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from main import create_corrector, correct_sentence, correct_batch
 from pdf_check import check_pdf
-from pdf_locator import locate_sentence
+from pdf_locator import MatchResult, locate_sentence, locate_sentences
 
 # 上传 PDF 体积上限，防止超大文件耗尽内存。
 MAX_PDF_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_BATCH_LOCATE_QUERIES = 100
 
 corrector = None
 
@@ -86,6 +91,11 @@ class LocateRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=512, description="要定位的文本内容")
 
 
+class BatchLocateQuery(BaseModel):
+    id: str | None = Field(default=None, max_length=128, description="调用方用于回填的查询 ID")
+    text: str = Field(..., min_length=1, max_length=512, description="要定位的文本内容")
+
+
 class BBox(BaseModel):
     x0: float
     y0: float
@@ -108,6 +118,19 @@ class LocateResponse(BaseModel):
     message: str | None = None
 
 
+class BatchLocateItemResponse(LocateResponse):
+    id: str | None = None
+    query: str
+
+
+class BatchLocateResponse(BaseModel):
+    filename: str
+    total: int
+    found_count: int
+    not_found_count: int
+    results: list[BatchLocateItemResponse]
+
+
 def _format_result(result: dict) -> CorrectionResponse:
     errors = [
         ErrorDetail(wrong=w, correct=r, position=p)
@@ -118,6 +141,67 @@ def _format_result(result: dict) -> CorrectionResponse:
         target=result["target"],
         errors=errors,
         has_error=len(errors) > 0,
+    )
+
+
+def _parse_batch_locate_queries(raw_queries: str) -> list[BatchLocateQuery]:
+    try:
+        payload = json.loads(raw_queries)
+    except JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"queries 必须是 JSON: {e.msg}")
+
+    if isinstance(payload, dict):
+        items = payload.get("queries")
+    else:
+        items = payload
+
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="queries 必须是非空数组")
+
+    if len(items) > MAX_BATCH_LOCATE_QUERIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"queries 最多支持 {MAX_BATCH_LOCATE_QUERIES} 条",
+        )
+
+    parsed: list[BatchLocateQuery] = []
+    for index, item in enumerate(items):
+        if isinstance(item, str):
+            item = {"text": item}
+        elif isinstance(item, dict) and "query" in item and "text" not in item:
+            item = {**item, "text": item["query"]}
+
+        try:
+            parsed.append(BatchLocateQuery(**item))
+        except (TypeError, ValidationError) as e:
+            raise HTTPException(status_code=400, detail=f"queries[{index}] 无效: {e}")
+
+    return parsed
+
+
+def _format_locate_result(query: BatchLocateQuery, result: MatchResult | None) -> BatchLocateItemResponse:
+    if result is None:
+        return BatchLocateItemResponse(
+            id=query.id,
+            query=query.text,
+            found=False,
+            message="Sentence not found in PDF.",
+        )
+
+    return BatchLocateItemResponse(
+        id=query.id,
+        query=query.text,
+        found=True,
+        page=result.page,
+        pageWidth=result.pageWidth,
+        pageHeight=result.pageHeight,
+        text=result.text,
+        x=result.x,
+        y=result.y,
+        width=result.width,
+        height=result.height,
+        match_layer=result.match_layer,
+        bboxes=[BBox(x0=b[0], y0=b[1], x1=b[2], y1=b[3]) for b in result.bboxes],
     )
 
 
@@ -205,9 +289,6 @@ async def locate_text(
 
     try:
         # 在线程池执行（pdf_locator 需要写临时文件 + pdfplumber 解析）
-        import tempfile
-        import os
-
         def _locate_with_tempfile():
             tmp_path = None
             try:
@@ -245,3 +326,58 @@ async def locate_text(
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"定位失败: {e}")
+
+
+@app.post("/locate/batch", response_model=BatchLocateResponse)
+async def locate_text_batch(
+    file: UploadFile = File(..., description="PDF 文件"),
+    queries: str = Form(..., description="JSON 数组，或包含 queries 字段的 JSON 对象"),
+):
+    """
+    在同一个 PDF 中批量定位多段原文，返回每段文本的页码、坐标和 bounding box。
+    """
+    filename = file.filename or "uploaded.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+
+    batch_queries = _parse_batch_locate_queries(queries)
+
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大，上限 {MAX_PDF_BYTES // (1024 * 1024)} MB",
+        )
+
+    try:
+        def _locate_batch_with_tempfile():
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp.write(pdf_bytes)
+                    tmp_path = tmp.name
+
+                return locate_sentences(tmp_path, [item.text for item in batch_queries])
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        matches = await run_in_threadpool(_locate_batch_with_tempfile)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"定位失败: {e}")
+
+    results = [
+        _format_locate_result(query, match)
+        for query, match in zip(batch_queries, matches)
+    ]
+    found_count = sum(1 for item in results if item.found)
+
+    return BatchLocateResponse(
+        filename=filename,
+        total=len(results),
+        found_count=found_count,
+        not_found_count=len(results) - found_count,
+        results=results,
+    )
