@@ -105,7 +105,44 @@ curl -X POST http://localhost:12342/correct/pdf \
 - `match_layer`：定位方式（1=精确匹配，2=归一化匹配，3=模糊匹配）
 - `location` 为 `null` 时表示定位失败，不影响错字结果本身
 
-### 3. 健康检查
+### 3. 原文定位
+
+在 PDF 中独立定位任意文本，返回页码和精确坐标（不依赖纠错，可单独调用）。
+
+```bash
+curl -X POST http://localhost:12342/locate \
+  -F "file=@文档.pdf" \
+  -F "query=要查找的文本"
+```
+
+**找到时返回**：
+```json
+{
+  "found": true,
+  "page": 1,
+  "pageWidth": 595,
+  "pageHeight": 842,
+  "text": "本次招标为道路改造工程",
+  "x": 95,
+  "y": 72,
+  "width": 121,
+  "height": 11,
+  "match_layer": 1,
+  "bboxes": [
+    {"x0": 95.0, "y0": 72.7, "x1": 216.0, "y1": 83.7}
+  ]
+}
+```
+
+**未找到时返回**：
+```json
+{
+  "found": false,
+  "message": "Sentence not found in PDF."
+}
+```
+
+### 4. 健康检查
 
 ```bash
 curl http://localhost:12342/health
@@ -148,6 +185,12 @@ from pdf_check import check_pdf
 with open("招标文件.pdf", "rb") as f:
     result = check_pdf(corrector, f.read())
 print(result)
+
+# 独立原文定位
+from pdf_locator import locate_sentence
+match = locate_sentence("文档.pdf", "本次招标为道路改造工程")
+if match:
+    print(f"第 {match.page} 页, 坐标 ({match.x}, {match.y}), 匹配方式 layer {match.match_layer}")
 ```
 
 ## 配置说明

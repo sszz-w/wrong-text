@@ -42,6 +42,16 @@ huggingface-cli download shibing624/macbert4csc-base-chinese \
   --local-dir models/macbert4csc
 ```
 
+> 若服务器无法访问 HuggingFace（如内网环境），在本地下载好模型后打包上传：
+> ```bash
+> # 本地打包
+> tar -czf macbert-model.tar.gz models/macbert4csc/
+> # 上传到服务器
+> scp macbert-model.tar.gz user@your-server:/path/to/deploy/
+> # 服务器解压
+> tar -xzf macbert-model.tar.gz
+> ```
+
 ### 3. 测试启动
 
 ```bash
@@ -67,13 +77,17 @@ Type=simple
 User=your-username
 WorkingDirectory=/path/to/deploy
 Environment="PATH=/path/to/deploy/venv/bin"
-ExecStart=/path/to/deploy/venv/bin/uvicorn app:app --host 0.0.0.0 --port 12342 --workers 2
+Environment="HF_HUB_OFFLINE=1"
+ExecStart=/path/to/deploy/venv/bin/uvicorn app:app --host 0.0.0.0 --port 12342 --workers 4
 Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> `HF_HUB_OFFLINE=1` 强制离线加载本地模型，避免服务器无外网时
+> 卡在连接 HuggingFace。模型已在步骤 2 下载到本地，无需联网。
 
 启用并启动服务：
 
@@ -181,6 +195,15 @@ with open("招标文件.pdf", "rb") as f:
         files={"file": f}
     )
 print(response.json())
+
+# 原文定位
+with open("文档.pdf", "rb") as f:
+    response = requests.post(
+        "http://your-server:12342/locate",
+        files={"file": f},
+        data={"query": "要查找的文本"}
+    )
+print(response.json())
 ```
 
 ### cURL 示例
@@ -194,6 +217,11 @@ curl -X POST http://your-server:12342/correct \
 # PDF 检查
 curl -X POST http://your-server:12342/correct/pdf \
   -F "file=@招标文件.pdf"
+
+# 原文定位
+curl -X POST http://your-server:12342/locate \
+  -F "file=@文档.pdf" \
+  -F "query=要查找的文本"
 ```
 
 ## 故障排查
@@ -230,6 +258,23 @@ huggingface-cli download shibing624/macbert4csc-base-chinese \
 - 增加服务器内存
 - 使用 `rule` 模型替代 `macbert`（更轻量，见 `main.py` 配置）
 
+### 问题 4：端口被占用（Address already in use）
+
+**现象**：重启后服务一直 `activating`，日志报 `[Errno 98] Address already in use`
+
+**原因**：旧的 uvicorn worker 进程未正常退出，仍占用端口。
+
+**解决**：
+```bash
+# 停止服务
+sudo systemctl stop wrong-word
+# 查找并清理占用端口的残留进程
+sudo lsof -i :12342
+sudo pkill -f "port 12342"
+# 确认端口已释放后重启
+sudo systemctl start wrong-word
+```
+
 ## 安全建议
 
 1. **限制访问来源**：在 Nginx 中添加 IP 白名单
@@ -243,9 +288,9 @@ huggingface-cli download shibing624/macbert4csc-base-chinese \
 # 停止服务
 sudo systemctl stop wrong-word
 
-# 拉取最新代码
-cd /path/to/deploy
-git pull  # 或重新上传文件
+# 更新代码（服务器无 git 时，从本地上传）
+# 本地: scp -P <port> app.py pdf_check.py pdf_locator.py main.py \
+#         user@your-server:/path/to/deploy/
 
 # 更新依赖
 source venv/bin/activate
