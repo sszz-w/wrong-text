@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from main import create_corrector, correct_sentence, correct_batch
 from pdf_check import check_pdf
-from pdf_locator import MatchResult, locate_sentence, locate_sentences
+from pdf_locator import MatchResult, locate_sentence, locate_sentences, locate_sentences_all
 
 # 上传 PDF 体积上限，防止超大文件耗尽内存。
 MAX_PDF_BYTES = 20 * 1024 * 1024  # 20 MB
@@ -131,6 +131,24 @@ class BatchLocateResponse(BaseModel):
     results: list[BatchLocateItemResponse]
 
 
+class BatchLocateAllItemResponse(BaseModel):
+    id: str | None = None
+    query: str
+    found: bool
+    match_count: int
+    matches: list[LocateResponse]
+    message: str | None = None
+
+
+class BatchLocateAllResponse(BaseModel):
+    filename: str
+    total: int
+    found_count: int
+    not_found_count: int
+    total_match_count: int
+    results: list[BatchLocateAllItemResponse]
+
+
 def _format_result(result: dict) -> CorrectionResponse:
     errors = [
         ErrorDetail(wrong=w, correct=r, position=p)
@@ -202,6 +220,45 @@ def _format_locate_result(query: BatchLocateQuery, result: MatchResult | None) -
         height=result.height,
         match_layer=result.match_layer,
         bboxes=[BBox(x0=b[0], y0=b[1], x1=b[2], y1=b[3]) for b in result.bboxes],
+    )
+
+
+def _format_locate_match(result: MatchResult) -> LocateResponse:
+    return LocateResponse(
+        found=True,
+        page=result.page,
+        pageWidth=result.pageWidth,
+        pageHeight=result.pageHeight,
+        text=result.text,
+        x=result.x,
+        y=result.y,
+        width=result.width,
+        height=result.height,
+        match_layer=result.match_layer,
+        bboxes=[BBox(x0=b[0], y0=b[1], x1=b[2], y1=b[3]) for b in result.bboxes],
+    )
+
+
+def _format_locate_all_result(
+    query: BatchLocateQuery,
+    matches: list[MatchResult],
+) -> BatchLocateAllItemResponse:
+    if not matches:
+        return BatchLocateAllItemResponse(
+            id=query.id,
+            query=query.text,
+            found=False,
+            match_count=0,
+            matches=[],
+            message="Sentence not found in PDF.",
+        )
+
+    return BatchLocateAllItemResponse(
+        id=query.id,
+        query=query.text,
+        found=True,
+        match_count=len(matches),
+        matches=[_format_locate_match(match) for match in matches],
     )
 
 
@@ -379,5 +436,62 @@ async def locate_text_batch(
         total=len(results),
         found_count=found_count,
         not_found_count=len(results) - found_count,
+        results=results,
+    )
+
+
+@app.post("/locate/batch/all", response_model=BatchLocateAllResponse)
+async def locate_text_batch_all(
+    file: UploadFile = File(..., description="PDF 文件"),
+    queries: str = Form(..., description="JSON 数组，或包含 queries 字段的 JSON 对象"),
+):
+    """
+    在同一个 PDF 中批量定位多段原文，并返回每段文本的全部匹配位置。
+    """
+    filename = file.filename or "uploaded.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+
+    batch_queries = _parse_batch_locate_queries(queries)
+
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大，上限 {MAX_PDF_BYTES // (1024 * 1024)} MB",
+        )
+
+    try:
+        def _locate_batch_all_with_tempfile():
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp.write(pdf_bytes)
+                    tmp_path = tmp.name
+
+                return locate_sentences_all(tmp_path, [item.text for item in batch_queries])
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        all_matches = await run_in_threadpool(_locate_batch_all_with_tempfile)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"定位失败: {e}")
+
+    results = [
+        _format_locate_all_result(query, matches)
+        for query, matches in zip(batch_queries, all_matches)
+    ]
+    found_count = sum(1 for item in results if item.found)
+    total_match_count = sum(item.match_count for item in results)
+
+    return BatchLocateAllResponse(
+        filename=filename,
+        total=len(results),
+        found_count=found_count,
+        not_found_count=len(results) - found_count,
+        total_match_count=total_match_count,
         results=results,
     )

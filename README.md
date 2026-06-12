@@ -145,6 +145,7 @@ curl -X POST http://localhost:12342/locate \
 ### 4. 批量原文定位
 
 在同一个 PDF 中一次定位多段原文，适合把纠错结果、审核项或业务条款批量回填到 PDF 坐标。
+每条文本只返回第一处匹配位置。
 
 **请求格式**：`multipart/form-data`
 
@@ -208,7 +209,81 @@ curl -X POST http://localhost:12342/locate/batch \
 - 单次最多定位 100 条文本
 - 每条文本长度：1-512 字符
 
-### 5. 健康检查
+### 5. 批量全部原文定位
+
+如果同一段原文在 PDF 中出现多次，可以使用该接口返回全部匹配位置。
+请求格式与 `/locate/batch` 相同，只需要更换 URL。
+
+```bash
+curl -X POST http://localhost:12342/locate/batch/all \
+  -F "file=@文档.pdf" \
+  -F 'queries={"queries":[{"id":"q1","text":"本次招标为道路改造工程"},{"id":"q2","text":"质量保证期"}]}'
+```
+
+**返回示例**：
+
+```json
+{
+  "filename": "文档.pdf",
+  "total": 2,
+  "found_count": 1,
+  "not_found_count": 1,
+  "total_match_count": 2,
+  "results": [
+    {
+      "id": "q1",
+      "query": "本次招标为道路改造工程",
+      "found": true,
+      "match_count": 2,
+      "matches": [
+        {
+          "found": true,
+          "page": 1,
+          "pageWidth": 595,
+          "pageHeight": 842,
+          "text": "本次招标为道路改造工程",
+          "x": 95,
+          "y": 72,
+          "width": 121,
+          "height": 11,
+          "match_layer": 1,
+          "bboxes": [
+            {"x0": 95.0, "y0": 72.7, "x1": 216.0, "y1": 83.7}
+          ],
+          "message": null
+        },
+        {
+          "found": true,
+          "page": 3,
+          "pageWidth": 595,
+          "pageHeight": 842,
+          "text": "本次招标为道路改造工程",
+          "x": 95,
+          "y": 128,
+          "width": 121,
+          "height": 11,
+          "match_layer": 1,
+          "bboxes": [
+            {"x0": 95.0, "y0": 128.7, "x1": 216.0, "y1": 139.7}
+          ],
+          "message": null
+        }
+      ],
+      "message": null
+    },
+    {
+      "id": "q2",
+      "query": "质量保证期",
+      "found": false,
+      "match_count": 0,
+      "matches": [],
+      "message": "Sentence not found in PDF."
+    }
+  ]
+}
+```
+
+### 6. 健康检查
 
 ```bash
 curl http://localhost:12342/health

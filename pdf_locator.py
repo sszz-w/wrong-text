@@ -104,6 +104,25 @@ def _try_exact(raw_text: str, query: str, chars: list[dict]) -> Optional[list[tu
     return _bboxes_of_chars(chars, list(range(idx, idx + len(query))))
 
 
+def _find_all_indices(text: str, query: str) -> list[int]:
+    indices = []
+    start = 0
+    while True:
+        idx = text.find(query, start)
+        if idx == -1:
+            return indices
+        indices.append(idx)
+        start = idx + max(len(query), 1)
+
+
+def _try_exact_all(raw_text: str, query: str, chars: list[dict]) -> list[list[tuple]]:
+    """Layer 1: all exact substring matches in raw char sequence."""
+    return [
+        _bboxes_of_chars(chars, list(range(idx, idx + len(query))))
+        for idx in _find_all_indices(raw_text, query)
+    ]
+
+
 def _try_normalized(raw_text: str, query: str, chars: list[dict]) -> Optional[list[tuple]]:
     """Layer 2: match after normalizing both sides; map back to original indices."""
     norm_query = _normalize(query)
@@ -120,6 +139,27 @@ def _try_normalized(raw_text: str, query: str, chars: list[dict]) -> Optional[li
         return None
     orig_indices = norm_to_orig[idx: idx + len(norm_query)]
     return _bboxes_of_chars(chars, orig_indices)
+
+
+def _normalized_text_with_orig_indices(chars: list[dict]) -> tuple[str, list[int]]:
+    norm_text = ""
+    norm_to_orig = []
+    for i, ch in enumerate(chars):
+        n = _normalize(ch["char"])
+        if n:
+            norm_to_orig.append(i)
+            norm_text += n
+    return norm_text, norm_to_orig
+
+
+def _try_normalized_all(raw_text: str, query: str, chars: list[dict]) -> list[list[tuple]]:
+    """Layer 2: all normalized matches mapped back to original character boxes."""
+    norm_query = _normalize(query)
+    norm_text, norm_to_orig = _normalized_text_with_orig_indices(chars)
+    return [
+        _bboxes_of_chars(chars, norm_to_orig[idx: idx + len(norm_query)])
+        for idx in _find_all_indices(norm_text, norm_query)
+    ]
 
 
 def _try_fuzzy(raw_text: str, query: str, chars: list[dict],
@@ -225,6 +265,23 @@ def _match_query_on_page(raw_text: str, query: str, chars: list[dict]) -> Option
     return None
 
 
+def _match_query_all_on_page(raw_text: str, query: str, chars: list[dict]) -> list[tuple[list[tuple], str, int]]:
+    matches = _try_exact_all(raw_text, query, chars)
+    if matches:
+        return [(bboxes, query, 1) for bboxes in matches]
+
+    matches = _try_normalized_all(raw_text, query, chars)
+    if matches:
+        return [(bboxes, _normalize(query), 2) for bboxes in matches]
+
+    fuzzy = _try_fuzzy(raw_text, query, chars)
+    if fuzzy:
+        bboxes, ratio = fuzzy
+        return [(bboxes, f"fuzzy(ratio={ratio:.2f})", 3)]
+
+    return []
+
+
 def _build_match_result(
     page_num: int,
     page_width: int,
@@ -288,6 +345,39 @@ def locate_sentences(pdf_path: str, queries: list[str]) -> list[Optional[MatchRe
                     match_layer=match_layer,
                 )
                 pending.remove(query_index)
+
+    return results
+
+
+def locate_sentences_all(pdf_path: str, queries: list[str]) -> list[list[MatchResult]]:
+    """
+    Search all occurrences for multiple queries in one PDF pass.
+    Returns one result list per query, preserving input order.
+    """
+    results: list[list[MatchResult]] = [[] for _ in queries]
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            chars = _extract_chars(page)
+            if not chars:
+                continue
+
+            raw_text = "".join(c["char"] for c in chars)
+            page_width = int(page.width)
+            page_height = int(page.height)
+
+            for query_index, query in enumerate(queries):
+                for bboxes, matched_text, match_layer in _match_query_all_on_page(raw_text, query, chars):
+                    results[query_index].append(
+                        _build_match_result(
+                            page_num=page_num,
+                            page_width=page_width,
+                            page_height=page_height,
+                            matched_text=matched_text,
+                            bboxes=bboxes,
+                            match_layer=match_layer,
+                        )
+                    )
 
     return results
 
